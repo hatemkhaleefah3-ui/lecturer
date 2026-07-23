@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import path from "path";
 import type { SlideData, ExtractedImage, ChartData } from "./types.js";
 
+type PptxSlide = ReturnType<InstanceType<typeof PptxGenJS>["addSlide"]>;
+
 const C = {
   black: "0A0A0A",
   nearBlack: "1A1A1A",
@@ -22,7 +24,7 @@ const BODY_Y = 1.05;
 const BODY_H = H - BODY_Y - M;
 const CHART_COLORS = [C.black, "404040", C.medGray, "A0A0A0", "C0C0C0", "E0E0E0"];
 
-function addTitle(slide: PptxGenJS.Slide, title = ""): void {
+function addTitle(slide: PptxSlide, title = ""): void {
   slide.addText(title, {
     x: M,
     y: 0.28,
@@ -38,7 +40,7 @@ function addTitle(slide: PptxGenJS.Slide, title = ""): void {
   });
 }
 
-function addBody(slide: PptxGenJS.Slide, body = "", x = M, w = CONTENT_W): void {
+function addBody(slide: PptxSlide, body = "", x = M, w = CONTENT_W): void {
   slide.addText(body, {
     x,
     y: BODY_Y + 0.12,
@@ -53,7 +55,7 @@ function addBody(slide: PptxGenJS.Slide, body = "", x = M, w = CONTENT_W): void 
   });
 }
 
-function renderTitle(slide: PptxGenJS.Slide, data: SlideData): void {
+function renderTitle(slide: PptxSlide, data: SlideData): void {
   slide.background = { color: C.white };
   slide.addText(data.title ?? "Untitled", {
     x: M,
@@ -86,7 +88,7 @@ function renderTitle(slide: PptxGenJS.Slide, data: SlideData): void {
   }
 }
 
-function renderSection(slide: PptxGenJS.Slide, data: SlideData): void {
+function renderSection(slide: PptxSlide, data: SlideData): void {
   slide.background = { color: C.nearBlack };
   slide.addText(data.title ?? "", {
     x: M,
@@ -119,7 +121,7 @@ function renderSection(slide: PptxGenJS.Slide, data: SlideData): void {
 }
 
 function renderContent(
-  slide: PptxGenJS.Slide,
+  slide: PptxSlide,
   data: SlideData,
   imageMap: Map<number, ExtractedImage>,
 ): void {
@@ -141,7 +143,7 @@ function renderContent(
   }
 }
 
-function renderTable(slide: PptxGenJS.Slide, data: SlideData): void {
+function renderTable(slide: PptxSlide, data: SlideData): void {
   slide.background = { color: C.white };
   addTitle(slide, data.title);
   const headers = (data.tableHeaders ?? []).map(String);
@@ -190,7 +192,7 @@ function validChartData(value: ChartData | undefined): value is ChartData {
   );
 }
 
-function renderChart(slide: PptxGenJS.Slide, data: SlideData): void {
+function renderChart(slide: PptxSlide, data: SlideData): void {
   slide.background = { color: C.white };
   addTitle(slide, data.title);
   if (!validChartData(data.chartData)) {
@@ -222,7 +224,7 @@ function renderChart(slide: PptxGenJS.Slide, data: SlideData): void {
   } as never);
 }
 
-function renderComparison(slide: PptxGenJS.Slide, data: SlideData): void {
+function renderComparison(slide: PptxSlide, data: SlideData): void {
   slide.background = { color: C.white };
   addTitle(slide, data.title);
   const gap = 0.18;
@@ -231,7 +233,7 @@ function renderComparison(slide: PptxGenJS.Slide, data: SlideData): void {
   addBody(slide, data.rightColumn ?? "", M + colW + gap, colW);
 }
 
-function renderCallout(slide: PptxGenJS.Slide, data: SlideData): void {
+function renderCallout(slide: PptxSlide, data: SlideData): void {
   slide.background = { color: C.white };
   addTitle(slide, data.title);
   const labels: Record<string, string> = {
