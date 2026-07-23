@@ -9,6 +9,23 @@ import type { SlideData } from "./types.js";
 
 export const PPTX_DIR = "/tmp/lecturer-pptx";
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function processJob(
   jobId: string,
   filePath: string,
@@ -18,7 +35,6 @@ export async function processJob(
   const log = logger.child({ jobId, filename });
 
   try {
-    // Step 1: Extract content
     log.info("Starting content extraction");
     await updateJob(jobId, {
       status: "extracting",
@@ -26,7 +42,11 @@ export async function processJob(
       progressPct: 10,
     });
 
-    const extraction = await parseFile(filePath, mimeType, filename);
+    const extraction = await withTimeout(
+      parseFile(filePath, mimeType, filename),
+      3 * 60 * 1000,
+      "Content extraction timed out after 3 minutes. The PDF may contain unusually complex or corrupted embedded objects.",
+    );
     log.info(
       { textBlocks: extraction.textBlocks.length, images: extraction.images.length },
       "Extraction complete",
@@ -44,7 +64,6 @@ export async function processJob(
       progressPct: 30,
     });
 
-    // Step 2: Analyze with Gemini
     log.info("Calling Gemini API");
     await updateJob(jobId, {
       status: "analyzing",
@@ -52,16 +71,15 @@ export async function processJob(
       progressPct: 40,
     });
 
-    const { slides, integrity } = await analyzeWithGemini(
-      extraction.textBlocks,
-      extraction.images,
-      filename,
+    const { slides, integrity } = await withTimeout(
+      analyzeWithGemini(extraction.textBlocks, extraction.images, filename),
+      4 * 60 * 1000,
+      "Gemini analysis timed out after 4 minutes. Please retry the upload.",
     );
     log.info({ slides: slides.length }, "Gemini analysis complete");
 
     await updateJob(jobId, { progressPct: 65 });
 
-    // Step 3: Generate PPTX
     log.info("Generating PPTX");
     await updateJob(jobId, {
       status: "generating",
@@ -72,22 +90,22 @@ export async function processJob(
     await fs.mkdir(PPTX_DIR, { recursive: true });
     const pptxPath = path.join(PPTX_DIR, `${jobId}.pptx`);
 
-    // Strip image binary data from slides before storing in DB
     const slidesForDb = slides.map((slide) => ({
       ...slide,
       images: slide.images?.map((img) => ({
         originalIndex: img.originalIndex,
         altText: img.altText,
         mimeType: img.mimeType,
-        // Do NOT store dataBase64 in DB — too large
       })),
     }));
 
-    // Generate PPTX with full image data
-    await generatePptxFile(slides, extraction.images, pptxPath);
+    await withTimeout(
+      generatePptxFile(slides, extraction.images, pptxPath),
+      3 * 60 * 1000,
+      "PowerPoint generation timed out after 3 minutes.",
+    );
     log.info({ pptxPath }, "PPTX generated");
 
-    // Step 4: Complete
     await updateJob(jobId, {
       status: "completed",
       progressStep: "Deck ready",
@@ -100,8 +118,7 @@ export async function processJob(
 
     log.info("Job completed successfully");
   } catch (error) {
-    const msg =
-      error instanceof Error ? error.message : String(error);
+    const msg = error instanceof Error ? error.message : String(error);
     log.error({ err: error }, "Job processing failed");
     await updateJob(jobId, {
       status: "failed",
