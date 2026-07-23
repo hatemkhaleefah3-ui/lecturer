@@ -13,7 +13,6 @@ import {
   GetLecturerSlidesResponse,
   DownloadLecturerPptxParams,
 } from "@workspace/api-zod";
-import { processJob, PPTX_DIR } from "../../lib/lecturer/processor.js";
 import { getJob } from "../../lib/lecturer/db-helpers.js";
 
 const UPLOAD_DIR = "/tmp/lecturer-uploads";
@@ -101,9 +100,22 @@ router.post(
 
     req.log.info({ jobId, filename: req.file.originalname }, "Job created");
 
-    // Fire-and-forget async processing
+    const uploadedPath = req.file.path;
+    const originalName = req.file.originalname;
+    const mimeType = req.file.mimetype;
+    const log = req.log;
+
+    // Load document/PDF/PPTX dependencies only after a valid upload. Keeping
+    // this stack out of cold-start initialization lets lightweight routes boot
+    // reliably in serverless environments.
     setImmediate(() => {
-      processJob(jobId, req.file!.path, req.file!.originalname, req.file!.mimetype);
+      void import("../../lib/lecturer/processor.js")
+        .then(({ processJob }) =>
+          processJob(jobId, uploadedPath, originalName, mimeType),
+        )
+        .catch((error) => {
+          log.error({ err: error, jobId }, "Failed to load lecturer processor");
+        });
     });
 
     res.status(201).json(CreateLecturerJobResponse.parse(mapJob(job)));
