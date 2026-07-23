@@ -16,7 +16,7 @@ const requestLogger = {
 };
 
 app.use((req, _res, next) => {
-  (req as typeof req & { log: typeof requestLogger }).log = requestLogger;
+  (req as unknown as { log: unknown }).log = requestLogger;
   next();
 });
 app.use(express.json());
