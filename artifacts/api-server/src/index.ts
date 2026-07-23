@@ -2,13 +2,6 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { hasDatabase, pool } from "@workspace/db";
 
-const rawPort = process.env["PORT"] ?? "3000";
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0 || port > 65535) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
-
 async function ensureDatabaseSchema(): Promise<void> {
   if (!hasDatabase) {
     logger.warn(
@@ -59,7 +52,7 @@ async function ensureDatabaseSchema(): Promise<void> {
   }
 }
 
-async function start(): Promise<void> {
+async function initializeDatabase(): Promise<void> {
   try {
     await ensureDatabaseSchema();
     if (hasDatabase) logger.info("Database schema is ready");
@@ -68,6 +61,19 @@ async function start(): Promise<void> {
       { err },
       "Database initialization failed; continuing with database-backed routes unavailable",
     );
+  }
+}
+
+void initializeDatabase();
+
+// Vercel invokes the exported Express handler directly. Traditional hosts and
+// local development still use the HTTP listener through the package start script.
+if (!process.env.VERCEL) {
+  const rawPort = process.env.PORT ?? "3000";
+  const port = Number(rawPort);
+
+  if (Number.isNaN(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid PORT value: "${rawPort}"`);
   }
 
   app.listen(port, (err) => {
@@ -80,4 +86,4 @@ async function start(): Promise<void> {
   });
 }
 
-void start();
+export default app;
