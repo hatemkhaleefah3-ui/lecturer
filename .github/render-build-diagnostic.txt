@@ -1,0 +1,1 @@
+Trigger full Render-equivalent build diagnostics.
