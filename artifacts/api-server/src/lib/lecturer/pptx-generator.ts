@@ -130,8 +130,7 @@ function renderContent(
   addSlideTitle(pSlide, slide.title ?? "");
   addDivider(pSlide, BODY_Y);
 
-  const hasImages =
-    slide.images && slide.images.length > 0;
+  const hasImages = slide.images && slide.images.length > 0;
   const textW = hasImages ? CONTENT_W * 0.57 : CONTENT_W;
   const imgX = MARGIN + CONTENT_W * 0.6;
   const imgW = CONTENT_W * 0.37;
@@ -384,7 +383,7 @@ function renderCallout(pSlide: PptxGenJS.Slide, slide: SlideData): void {
     fontSize: 9,
     bold: true,
     color: C.medGray,
-    characterSpacing: 2,
+    charSpacing: 2,
   });
 
   // Body text
