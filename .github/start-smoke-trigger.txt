@@ -1,0 +1,1 @@
+Trigger production start smoke test with CI database URL.
