@@ -231,11 +231,24 @@ async function extractPdfImagesInternal(
   buffer: Buffer,
   textBlocks: TextBlock[],
 ): Promise<ExtractedImage[]> {
+  type PdfLoadingOptions = {
+    data: Uint8Array;
+    disableFontFace: boolean;
+    nativeImageDecoderSupport: "none";
+    isEvalSupported: boolean;
+    disableWorker: boolean;
+  };
   const pdfjs = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
-    getDocument: (data: Uint8Array) => { promise?: Promise<any> } | Promise<any>;
+    getDocument: (options: PdfLoadingOptions) => { promise?: Promise<any> } | Promise<any>;
     OPS: { paintImageXObject: number; paintJpegXObject: number };
   };
-  const loadingTask = pdfjs.getDocument(new Uint8Array(buffer));
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    disableFontFace: true,
+    nativeImageDecoderSupport: "none",
+    isEvalSupported: false,
+    disableWorker: true,
+  });
   const document = await ("promise" in loadingTask && loadingTask.promise
     ? loadingTask.promise
     : loadingTask);
