@@ -1,0 +1,1 @@
+verify PDF.js Node font configuration
