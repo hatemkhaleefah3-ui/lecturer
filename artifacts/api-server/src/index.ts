@@ -70,6 +70,7 @@ function getConverterRouter(): Promise<RequestHandler> {
   return converterRouter;
 }
 
+// Stateless conversion is mounted before the optional database-backed job API.
 app.use("/api", async (req, res, next) => {
   if (req.method === "POST" && req.path === "/lecturer/convert") {
     try {
