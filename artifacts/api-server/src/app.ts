@@ -3,25 +3,9 @@ import cors from "cors";
 import { pinoHttp } from "pino-http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import router from "./routes";
 import { logger } from "./lib/logger";
-
-const require = createRequire(import.meta.url);
-
-// pdf-parse bundles an older PDF.js build whose default font loader assumes a
-// browser DOM. Configure that shared module for Node before any PDF job runs;
-// otherwise PDFs with embedded fonts can crash the process with
-// `ReferenceError: document is not defined` during image extraction.
-try {
-  const pdfjs = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
-    disableFontFace?: boolean;
-  };
-  pdfjs.disableFontFace = true;
-} catch (error) {
-  logger.warn({ err: error }, "Unable to configure PDF.js font loading");
-}
 
 const app: Express = express();
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
