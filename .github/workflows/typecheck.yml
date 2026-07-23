@@ -35,4 +35,19 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck API server
-        run: pnpm exec tsc -p artifacts/api-server/tsconfig.json --noEmit
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          pnpm exec tsc -p artifacts/api-server/tsconfig.json --noEmit 2>&1 | tee typecheck.log
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Upload typecheck log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-server-typecheck-log
+          path: typecheck.log
+          if-no-files-found: error
