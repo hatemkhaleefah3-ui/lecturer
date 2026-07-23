@@ -63,10 +63,17 @@ export interface SlideData {
 export interface IntegrityReport {
   textBlocksExtracted: number;
   textBlocksPlaced: number;
+  textBlocksRetained: number;
   imagesExtracted: number;
   imagesPlaced: number;
   unplacedTextIndices: number[];
   unplacedImageIndices: number[];
+  duplicateTextIndices: number[];
+  duplicateImageIndices: number[];
+  invalidTextIndices: number[];
+  invalidImageIndices: number[];
+  referencedButMissingTextIndices: number[];
+  textRetentionPct: number;
   allPlaced: boolean;
 }
 
