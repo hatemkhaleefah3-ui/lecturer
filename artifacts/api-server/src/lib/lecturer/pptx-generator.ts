@@ -1,9 +1,28 @@
-import PptxGenJS from "pptxgenjs";
+import PptxGenJSModule from "pptxgenjs";
 import fs from "fs/promises";
 import path from "path";
 import type { SlideData, ExtractedImage, ChartData } from "./types.js";
 
-type PptxSlide = ReturnType<InstanceType<typeof PptxGenJS>["addSlide"]>;
+type PptxSlide = {
+  background: { color: string };
+  addText: (...args: unknown[]) => unknown;
+  addImage: (...args: unknown[]) => unknown;
+  addTable: (...args: unknown[]) => unknown;
+  addChart: (...args: unknown[]) => unknown;
+};
+
+type PptxPresentation = {
+  layout: string;
+  author: string;
+  company: string;
+  title: string;
+  subject: string;
+  theme: { headFontFace: string; bodyFontFace: string };
+  addSlide: () => PptxSlide;
+  writeFile: (options: { fileName: string }) => Promise<unknown>;
+};
+
+const PptxGenJS = PptxGenJSModule as unknown as new () => PptxPresentation;
 
 const C = {
   black: "0A0A0A",
