@@ -5,7 +5,7 @@
     "tsBuildInfoFile": ".tsbuildinfo",
     "outDir": "dist",
     "rootDir": "../..",
-    "types": ["node"]
+    "types": ["node", "pino-http"]
   },
   "include": ["src"],
   "references": [
