@@ -1,0 +1,38 @@
+Build a full-stack web app called "Lecturer" that converts a lecture file into a professionally redesigned PowerPoint deck using the Gemini API.
+
+## What it does
+1. User uploads a lecture file (.pdf, .docx, .pptx, .txt, .md, or scanned/image-based PDF).
+2. The app extracts every text block and every image from the file, and records which image was originally near which text block.
+3. The extracted text + image metadata is sent to the Gemini API, which:
+   - Groups related content into new topics/sections (it should NOT preserve the original file's order — it creates a new structure).
+   - Re-pairs each image with whichever text block it's now most relevant to.
+   - Returns a structured JSON outline of slides: each slide has a type, its text content, which image(s) belong to it, and any table/chart/diagram data.
+4. The app renders that structured outline into an actual .pptx file (editable PowerPoint, not flattened images).
+5. User can preview the deck in-browser, then download the .pptx.
+
+## Slide types to support
+- Title slide
+- Section header
+- Content slide (text + image side by side)
+- Data table slide (styled table, not plain text)
+- Chart/diagram slide (bar/line/pie charts for numeric data; flowcharts for processes — render these as images and embed, e.g. via a charting library or Mermaid-to-image)
+- Comparison slide (side-by-side columns)
+- Note/callout slide or inline note box (icon + colored background, for definitions/warnings/key takeaways)
+
+## Design requirements
+- Monochrome color palette only: white, black, and a range of grays (no other hues). Use value/contrast to create hierarchy — e.g. near-black for headings, dark gray for body text, light gray for backgrounds/dividers/table stripes, white for slide backgrounds and negative space. Charts and diagrams should also stay within this palette (differentiate data series by shade/pattern, not color).
+- A heading+body font pairing, consistent margins and spacing.
+- 4–6 distinct layout templates within that one theme so slides don't look repetitive.
+- Every slide must have both a text block and a supporting visual (image, chart, table, or diagram) — no near-empty slides, no overcrowded ones.
+
+## Data integrity requirement
+- After generation, run a check confirming every extracted text block and every extracted image from the original file was placed somewhere in the output. Show the user a simple inventory count (e.g. "42 text blocks extracted → 42 placed, 18 images extracted → 18 placed") so nothing silently gets dropped. Flag anything unplaced instead of discarding it.
+
+## Technical setup
+- Frontend: file upload UI, processing status, in-browser slide preview, download button.
+- Backend: file parsing (handle each file type appropriately, including OCR for scanned PDFs), Gemini API integration (store the API key in Replit Secrets, not hardcoded), and .pptx generation (use a library like `python-pptx` or an equivalent for whatever stack you choose).
+- Structure the Gemini call to return structured JSON (slide layout + content), not freeform text — this keeps the .pptx generation step deterministic and separate from the AI reasoning step.
+- Push all code to my connected GitHub repo `lecturer`.
+- Include a README explaining the architecture and how to add the Gemini API key.
+
+Prioritize getting a working end-to-end pipeline (upload → process → generate → download) first, with basic styling — polish the design system and add chart/diagram variety once the core flow works.
