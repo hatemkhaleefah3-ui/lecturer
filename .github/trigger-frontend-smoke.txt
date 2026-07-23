@@ -1,0 +1,1 @@
+Verify frontend root and SPA fallback.
