@@ -1,0 +1,75 @@
+name: Live Render E2E
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Create fixture
+        run: |
+          cat > lecture.txt <<'EOF'
+          Cellular Respiration
+
+          Glycolysis occurs in the cytosol and produces two pyruvate, two ATP, and two NADH.
+
+          The citric acid cycle occurs in the mitochondrial matrix and produces carbon dioxide, NADH, FADH2, and ATP.
+
+          Oxidative phosphorylation uses the electron transport chain and ATP synthase.
+          EOF
+      - name: Wait for Render
+        run: |
+          for attempt in {1..60}; do
+            code=$(curl -sS -o /tmp/home -w '%{http_code}' https://lecturer.onrender.com/ || true)
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Upload and poll
+        run: |
+          set -euo pipefail
+          response=$(curl --fail-with-body -sS -F 'file=@lecture.txt;type=text/plain' https://lecturer.onrender.com/api/lecturer/jobs)
+          echo "$response" | tee upload.json
+          id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$response")
+          echo "JOB_ID=$id" >> "$GITHUB_ENV"
+          for attempt in {1..120}; do
+            curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$id" -o status.json
+            cat status.json
+            status=$(python3 -c 'import json; print(json.load(open("status.json"))["status"])')
+            [ "$status" = completed ] && exit 0
+            if [ "$status" = failed ]; then python3 -c 'import json; d=json.load(open("status.json")); raise SystemExit(d.get("error"))'; fi
+            sleep 5
+          done
+          exit 1
+      - name: Validate output
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$JOB_ID/slides" -o slides.json
+          curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$JOB_ID/download" -o result.pptx
+          unzip -t result.pptx
+          unzip -p result.pptx '[Content_Types].xml' | grep -q presentationml
+          unzip -p result.pptx ppt/slides/slide1.xml | grep -q '<a:t>'
+          python3 - <<'PY'
+          import json
+          data=json.load(open('slides.json'))
+          assert data.get('slides'), data
+          integrity=data.get('integrity') or {}
+          assert integrity.get('textBlocksExtracted', 0) > 0, integrity
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-e2e-evidence
+          path: |
+            upload.json
+            status.json
+            slides.json
+            result.pptx
+          if-no-files-found: ignore
