@@ -13,6 +13,11 @@ function errorMessage(error: unknown): string {
   return "An unknown error occurred."
 }
 
+function isTransientServerError(error: unknown): boolean {
+  const message = errorMessage(error)
+  return /HTTP\s+(502|503|504)\b/i.test(message) || /bad gateway|service unavailable|gateway timeout/i.test(message)
+}
+
 export function ProcessingPage() {
   const [, params] = useRoute("/jobs/:jobId")
   const jobId = params?.jobId
@@ -27,6 +32,9 @@ export function ProcessingPage() {
         if (state?.status === "completed" || state?.status === "failed") return false
         return 2000
       },
+      retry: (failureCount, queryError) =>
+        isTransientServerError(queryError) && failureCount < 8,
+      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
     },
   })
 
@@ -36,7 +44,7 @@ export function ProcessingPage() {
 
   if (!jobId) return null
 
-  if (error) {
+  if (error && !job) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
         <div className="max-w-md w-full space-y-4">
