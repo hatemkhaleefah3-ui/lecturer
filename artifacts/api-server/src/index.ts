@@ -36,6 +36,27 @@ async function ensureDatabaseSchema(): Promise<void> {
       updated_at timestamp NOT NULL DEFAULT now()
     )
   `);
+
+  // Processing currently runs inside this web process. If Render restarts the
+  // instance, those in-memory tasks cannot resume. Mark their database rows as
+  // failed instead of leaving the UI permanently stuck at the last percentage.
+  const orphaned = await pool.query(`
+    UPDATE lecturer_jobs
+    SET
+      status = 'failed',
+      progress_step = NULL,
+      error = 'Processing was interrupted because the server restarted. Please upload the document again.',
+      updated_at = now()
+    WHERE status IN ('pending', 'extracting', 'analyzing', 'generating')
+    RETURNING id
+  `);
+
+  if (orphaned.rowCount) {
+    logger.warn(
+      { orphanedJobs: orphaned.rowCount },
+      "Marked interrupted lecturer jobs as failed",
+    );
+  }
 }
 
 async function start(): Promise<void> {
