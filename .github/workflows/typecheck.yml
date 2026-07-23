@@ -55,6 +55,10 @@ jobs:
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:4173/api/healthz > health.json; then
+              curl --fail --silent http://127.0.0.1:4173/ > index.html
+              grep -qi '<!doctype html' index.html
+              curl --fail --silent http://127.0.0.1:4173/jobs/test-job > spa.html
+              grep -qi '<!doctype html' spa.html
               cat health.json
               exit 0
             fi
@@ -76,4 +80,6 @@ jobs:
             build.log
             start.log
             health.json
+            index.html
+            spa.html
           if-no-files-found: ignore
