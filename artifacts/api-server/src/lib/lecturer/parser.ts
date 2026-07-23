@@ -1,8 +1,11 @@
 import fs from "fs/promises";
 import path from "path";
+import { createRequire } from "node:module";
+import { deflateSync } from "node:zlib";
 import { GoogleGenAI } from "@google/genai";
-import { PNG } from "pngjs";
 import type { ExtractionResult, TextBlock, ExtractedImage } from "./types.js";
+
+const require = createRequire(import.meta.url);
 
 const MIME_BY_EXT: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -129,6 +132,34 @@ async function extractScannedPdfText(buffer: Buffer): Promise<TextBlock[]> {
   return textBlocks;
 }
 
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let value = n;
+    for (let k = 0; k < 8; k += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[n] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBuffer.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 8 + data.length);
+  return chunk;
+}
+
 function rawPdfImageToPng(image: {
   width: number;
   height: number;
@@ -141,23 +172,40 @@ function rawPdfImageToPng(image: {
   const channels = source.length / pixelCount;
   if (![1, 3, 4].includes(channels)) return null;
 
-  const png = new PNG({ width: image.width, height: image.height });
-  for (let i = 0; i < pixelCount; i += 1) {
-    const src = i * channels;
-    const dst = i * 4;
-    if (channels === 1) {
-      png.data[dst] = source[src];
-      png.data[dst + 1] = source[src];
-      png.data[dst + 2] = source[src];
-      png.data[dst + 3] = 255;
-    } else {
-      png.data[dst] = source[src];
-      png.data[dst + 1] = source[src + 1];
-      png.data[dst + 2] = source[src + 2];
-      png.data[dst + 3] = channels === 4 ? source[src + 3] : 255;
+  const scanlines = Buffer.alloc((image.width * 4 + 1) * image.height);
+  for (let y = 0; y < image.height; y += 1) {
+    const rowOffset = y * (image.width * 4 + 1);
+    scanlines[rowOffset] = 0;
+    for (let x = 0; x < image.width; x += 1) {
+      const pixel = y * image.width + x;
+      const src = pixel * channels;
+      const dst = rowOffset + 1 + x * 4;
+      if (channels === 1) {
+        scanlines[dst] = source[src];
+        scanlines[dst + 1] = source[src];
+        scanlines[dst + 2] = source[src];
+        scanlines[dst + 3] = 255;
+      } else {
+        scanlines[dst] = source[src];
+        scanlines[dst + 1] = source[src + 1];
+        scanlines[dst + 2] = source[src + 2];
+        scanlines[dst + 3] = channels === 4 ? source[src + 3] : 255;
+      }
     }
   }
-  return PNG.sync.write(png).toString("base64");
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(image.width, 0);
+  ihdr.writeUInt32BE(image.height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const png = Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(scanlines)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+  return png.toString("base64");
 }
 
 async function extractPdfImages(
@@ -165,12 +213,14 @@ async function extractPdfImages(
   textBlocks: TextBlock[],
 ): Promise<ExtractedImage[]> {
   try {
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const document = await pdfjs.getDocument({
-      data: new Uint8Array(buffer),
-      disableWorker: true,
-      useSystemFonts: true,
-    }).promise;
+    const pdfjs = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
+      getDocument: (data: Uint8Array) => { promise?: Promise<any> } | Promise<any>;
+      OPS: { paintImageXObject: number; paintJpegXObject: number };
+    };
+    const loadingTask = pdfjs.getDocument(new Uint8Array(buffer));
+    const document = await ("promise" in loadingTask && loadingTask.promise
+      ? loadingTask.promise
+      : loadingTask);
     const images: ExtractedImage[] = [];
     const seen = new Set<string>();
 
@@ -188,8 +238,7 @@ async function extractPdfImages(
 
         const image = await new Promise<any>((resolve) => {
           try {
-            const immediate = page.objs.get(objectName, resolve);
-            if (immediate) resolve(immediate);
+            page.objs.get(objectName, (value: unknown) => resolve(value));
           } catch {
             resolve(null);
           }
