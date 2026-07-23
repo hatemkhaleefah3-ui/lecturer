@@ -19,7 +19,6 @@ export interface ErrorResponse {
 
 export type LecturerJobStatus = typeof LecturerJobStatus[keyof typeof LecturerJobStatus];
 
-
 export const LecturerJobStatus = {
   pending: 'pending',
   extracting: 'extracting',
@@ -56,7 +55,6 @@ export interface SlideImage {
 
 export type SlideDataType = typeof SlideDataType[keyof typeof SlideDataType];
 
-
 export const SlideDataType = {
   title: 'title',
   section_header: 'section_header',
@@ -69,17 +67,25 @@ export const SlideDataType = {
 
 export type SlideDataChartType = typeof SlideDataChartType[keyof typeof SlideDataChartType] | null;
 
-
 export const SlideDataChartType = {
   bar: 'bar',
   line: 'line',
   pie: 'pie',
 } as const;
 
-export type SlideDataChartData = { [key: string]: unknown } | null;
+export interface SlideDataChartDataset {
+  label: string;
+  values: number[];
+}
+
+export interface SlideDataChartDataObject {
+  labels: string[];
+  datasets: SlideDataChartDataset[];
+}
+
+export type SlideDataChartData = SlideDataChartDataObject | null;
 
 export type SlideDataCalloutStyle = typeof SlideDataCalloutStyle[keyof typeof SlideDataCalloutStyle] | null;
-
 
 export const SlideDataCalloutStyle = {
   definition: 'definition',
@@ -119,4 +125,3 @@ export interface SlidesResult {
   slides: SlideData[];
   integrity: IntegrityReport;
 }
-
