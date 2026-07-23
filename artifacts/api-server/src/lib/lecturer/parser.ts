@@ -6,6 +6,9 @@ import { GoogleGenAI } from "@google/genai";
 import type { ExtractionResult, TextBlock, ExtractedImage } from "./types.js";
 
 const require = createRequire(import.meta.url);
+const PDF_IMAGE_OBJECT_TIMEOUT_MS = 1500;
+const PDF_IMAGE_EXTRACTION_TIMEOUT_MS = 45_000;
+const MAX_PDF_IMAGES = 60;
 
 const MIME_BY_EXT: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -53,25 +56,42 @@ function nearestTextIndex(textBlocks: TextBlock[], pageNum?: number): number | u
   return textBlocks.at(-1)?.index;
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), timeoutMs);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 export async function parseFile(
   filePath: string,
   _mimeType: string,
   originalFilename: string,
 ): Promise<ExtractionResult> {
   const ext = path.extname(originalFilename).toLowerCase();
-
   if (ext === ".txt" || ext === ".md") return parseTxtMd(filePath);
   if (ext === ".pdf") return parsePdf(filePath);
   if (ext === ".docx") return parseDocx(filePath);
   if (ext === ".pptx") return parsePptx(filePath);
-
   throw new Error(`Unsupported file type: ${ext}`);
 }
 
 async function parseTxtMd(filePath: string): Promise<ExtractionResult> {
   const content = await fs.readFile(filePath, "utf-8");
-  const textBlocks = normalizeBlocks(content).map((text, index) => ({ index, text }));
-  return { textBlocks, images: [] };
+  return {
+    textBlocks: normalizeBlocks(content).map((text, index) => ({ index, text })),
+    images: [],
+  };
 }
 
 async function extractScannedPdfText(buffer: Buffer): Promise<TextBlock[]> {
@@ -106,14 +126,10 @@ async function extractScannedPdfText(buffer: Buffer): Promise<TextBlock[]> {
         ],
       },
     ],
-    config: {
-      responseMimeType: "application/json",
-      maxOutputTokens: 16384,
-    },
+    config: { responseMimeType: "application/json", maxOutputTokens: 16384 },
   });
 
   if (!response.text) throw new Error("Gemini vision returned no OCR text for the scanned PDF.");
-
   let parsed: { pages?: Array<{ pageNum?: number; blocks?: string[] }> };
   try {
     parsed = JSON.parse(response.text);
@@ -125,8 +141,7 @@ async function extractScannedPdfText(buffer: Buffer): Promise<TextBlock[]> {
   for (const page of parsed.pages ?? []) {
     for (const block of page.blocks ?? []) {
       const text = block.replace(/\s+/g, " ").trim();
-      if (!text) continue;
-      textBlocks.push({ index: textBlocks.length, text, pageNum: page.pageNum });
+      if (text) textBlocks.push({ index: textBlocks.length, text, pageNum: page.pageNum });
     }
   }
   return textBlocks;
@@ -167,30 +182,21 @@ function rawPdfImageToPng(image: {
 }): string | null {
   const pixelCount = image.width * image.height;
   if (!pixelCount || pixelCount > 25_000_000) return null;
-
-  const source = image.data;
-  const channels = source.length / pixelCount;
+  const channels = image.data.length / pixelCount;
   if (![1, 3, 4].includes(channels)) return null;
 
   const scanlines = Buffer.alloc((image.width * 4 + 1) * image.height);
   for (let y = 0; y < image.height; y += 1) {
     const rowOffset = y * (image.width * 4 + 1);
-    scanlines[rowOffset] = 0;
     for (let x = 0; x < image.width; x += 1) {
       const pixel = y * image.width + x;
       const src = pixel * channels;
       const dst = rowOffset + 1 + x * 4;
-      if (channels === 1) {
-        scanlines[dst] = source[src];
-        scanlines[dst + 1] = source[src];
-        scanlines[dst + 2] = source[src];
-        scanlines[dst + 3] = 255;
-      } else {
-        scanlines[dst] = source[src];
-        scanlines[dst + 1] = source[src + 1];
-        scanlines[dst + 2] = source[src + 2];
-        scanlines[dst + 3] = channels === 4 ? source[src + 3] : 255;
-      }
+      const value = image.data[src];
+      scanlines[dst] = channels === 1 ? value : image.data[src];
+      scanlines[dst + 1] = channels === 1 ? value : image.data[src + 1];
+      scanlines[dst + 2] = channels === 1 ? value : image.data[src + 2];
+      scanlines[dst + 3] = channels === 4 ? image.data[src + 3] : 255;
     }
   }
 
@@ -199,95 +205,108 @@ function rawPdfImageToPng(image: {
   ihdr.writeUInt32BE(image.height, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
-  const png = Buffer.concat([
+  return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     pngChunk("IHDR", ihdr),
     pngChunk("IDAT", deflateSync(scanlines)),
     pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-  return png.toString("base64");
+  ]).toString("base64");
+}
+
+async function getPdfImageObject(page: any, objectName: string): Promise<any | null> {
+  return withTimeout(
+    new Promise<any | null>((resolve) => {
+      try {
+        page.objs.get(objectName, (value: unknown) => resolve(value ?? null));
+      } catch {
+        resolve(null);
+      }
+    }),
+    PDF_IMAGE_OBJECT_TIMEOUT_MS,
+    null,
+  );
+}
+
+async function extractPdfImagesInternal(
+  buffer: Buffer,
+  textBlocks: TextBlock[],
+): Promise<ExtractedImage[]> {
+  const pdfjs = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
+    getDocument: (data: Uint8Array) => { promise?: Promise<any> } | Promise<any>;
+    OPS: { paintImageXObject: number; paintJpegXObject: number };
+  };
+  const loadingTask = pdfjs.getDocument(new Uint8Array(buffer));
+  const document = await ("promise" in loadingTask && loadingTask.promise
+    ? loadingTask.promise
+    : loadingTask);
+  const images: ExtractedImage[] = [];
+  const seen = new Set<string>();
+
+  for (let pageNum = 1; pageNum <= document.numPages; pageNum += 1) {
+    if (images.length >= MAX_PDF_IMAGES) break;
+    const page = await document.getPage(pageNum);
+    const operations = await page.getOperatorList();
+    for (let i = 0; i < operations.fnArray.length; i += 1) {
+      if (images.length >= MAX_PDF_IMAGES) break;
+      const fn = operations.fnArray[i];
+      if (fn !== pdfjs.OPS.paintImageXObject && fn !== pdfjs.OPS.paintJpegXObject) continue;
+      const objectName = operations.argsArray[i]?.[0];
+      if (typeof objectName !== "string") continue;
+      const uniqueKey = `${pageNum}:${objectName}`;
+      if (seen.has(uniqueKey)) continue;
+      seen.add(uniqueKey);
+
+      const image = await getPdfImageObject(page, objectName);
+      if (!image?.data || !image.width || !image.height) continue;
+      const dataBase64 = rawPdfImageToPng(image);
+      if (!dataBase64) continue;
+      images.push({
+        index: images.length,
+        dataBase64,
+        mimeType: "image/png",
+        altText: `PDF page ${pageNum} image ${images.length + 1}`,
+        pageNum,
+        nearTextIndex: nearestTextIndex(textBlocks, pageNum),
+      });
+    }
+    page.cleanup?.();
+  }
+  document.cleanup?.();
+  document.destroy?.();
+  return images;
 }
 
 async function extractPdfImages(
   buffer: Buffer,
   textBlocks: TextBlock[],
 ): Promise<ExtractedImage[]> {
-  try {
-    const pdfjs = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
-      getDocument: (data: Uint8Array) => { promise?: Promise<any> } | Promise<any>;
-      OPS: { paintImageXObject: number; paintJpegXObject: number };
-    };
-    const loadingTask = pdfjs.getDocument(new Uint8Array(buffer));
-    const document = await ("promise" in loadingTask && loadingTask.promise
-      ? loadingTask.promise
-      : loadingTask);
-    const images: ExtractedImage[] = [];
-    const seen = new Set<string>();
-
-    for (let pageNum = 1; pageNum <= document.numPages; pageNum += 1) {
-      const page = await document.getPage(pageNum);
-      const operations = await page.getOperatorList();
-      for (let i = 0; i < operations.fnArray.length; i += 1) {
-        const fn = operations.fnArray[i];
-        if (fn !== pdfjs.OPS.paintImageXObject && fn !== pdfjs.OPS.paintJpegXObject) continue;
-        const objectName = operations.argsArray[i]?.[0];
-        if (typeof objectName !== "string") continue;
-        const uniqueKey = `${pageNum}:${objectName}`;
-        if (seen.has(uniqueKey)) continue;
-        seen.add(uniqueKey);
-
-        const image = await new Promise<any>((resolve) => {
-          try {
-            page.objs.get(objectName, (value: unknown) => resolve(value));
-          } catch {
-            resolve(null);
-          }
-        });
-        if (!image?.data || !image.width || !image.height) continue;
-        const dataBase64 = rawPdfImageToPng(image);
-        if (!dataBase64) continue;
-        images.push({
-          index: images.length,
-          dataBase64,
-          mimeType: "image/png",
-          altText: `PDF page ${pageNum} image ${images.length + 1}`,
-          pageNum,
-          nearTextIndex: nearestTextIndex(textBlocks, pageNum),
-        });
-      }
-    }
-    return images;
-  } catch {
-    return [];
-  }
+  return withTimeout(
+    extractPdfImagesInternal(buffer, textBlocks).catch(() => []),
+    PDF_IMAGE_EXTRACTION_TIMEOUT_MS,
+    [],
+  );
 }
 
 async function parsePdf(filePath: string): Promise<ExtractionResult> {
   const pdfParse = (await import("pdf-parse")).default;
   const buffer = await fs.readFile(filePath);
   const data = await pdfParse(buffer);
-
-  let textBlocks = normalizeBlocks(String(data.text ?? "")).map((text, index) => ({
-    index,
-    text,
-  }));
+  let textBlocks = normalizeBlocks(String(data.text ?? "")).map((text, index) => ({ index, text }));
   if (textBlocks.length === 0) textBlocks = await extractScannedPdfText(buffer);
-
   const images = await extractPdfImages(buffer, textBlocks);
   return { textBlocks, images };
 }
 
 async function parseDocx(filePath: string): Promise<ExtractionResult> {
   const JSZip = (await import("jszip")).default;
-  const buffer = await fs.readFile(filePath);
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await JSZip.loadAsync(await fs.readFile(filePath));
   const documentXml = await zip.file("word/document.xml")?.async("string");
   if (!documentXml) throw new Error("DOCX is missing word/document.xml");
   const relsXml = (await zip.file("word/_rels/document.xml.rels")?.async("string")) ?? "";
   const rels = relationshipMap(relsXml, "word");
-
   const textBlocks: TextBlock[] = [];
   const imageAssociations = new Map<string, number | undefined>();
+
   for (const paragraphMatch of documentXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)) {
     const paragraph = paragraphMatch[0];
     const text = [...paragraph.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
@@ -324,11 +343,9 @@ async function parseDocx(filePath: string): Promise<ExtractionResult> {
 
 async function parsePptx(filePath: string): Promise<ExtractionResult> {
   const JSZip = (await import("jszip")).default;
-  const buffer = await fs.readFile(filePath);
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await JSZip.loadAsync(await fs.readFile(filePath));
   const textBlocks: TextBlock[] = [];
   const imageAssociations = new Map<string, { pageNum: number; nearTextIndex?: number }>();
-
   const slideFiles = Object.keys(zip.files)
     .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
     .sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0]));
@@ -345,10 +362,8 @@ async function parsePptx(filePath: string): Promise<ExtractionResult> {
       nearTextIndex = textBlocks.length;
       textBlocks.push({ index: nearTextIndex, text: texts.join(" "), pageNum });
     }
-
     const relsPath = `ppt/slides/_rels/${path.posix.basename(slidePath)}.rels`;
-    const relsXml = (await zip.file(relsPath)?.async("string")) ?? "";
-    const rels = relationshipMap(relsXml, "ppt/slides");
+    const rels = relationshipMap((await zip.file(relsPath)?.async("string")) ?? "", "ppt/slides");
     for (const imageMatch of slideXml.matchAll(/<a:blip\b[^>]*\br:embed="([^"]+)"/g)) {
       const target = rels.get(imageMatch[1]);
       if (target) imageAssociations.set(target, { pageNum, nearTextIndex });
