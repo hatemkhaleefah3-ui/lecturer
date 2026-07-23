@@ -109,7 +109,7 @@ async function extractScannedPdfText(buffer: Buffer): Promise<TextBlock[]> {
 
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",
     contents: [
       {
         role: "user",
@@ -303,9 +303,15 @@ async function extractPdfImages(
 async function parsePdf(filePath: string): Promise<ExtractionResult> {
   const pdfParse = (await import("pdf-parse")).default;
   const buffer = await fs.readFile(filePath);
-  const data = await pdfParse(buffer);
-  let textBlocks = normalizeBlocks(String(data.text ?? "")).map((text, index) => ({ index, text }));
+  let textBlocks: TextBlock[] = [];
+  try {
+    const data = await pdfParse(buffer);
+    textBlocks = normalizeBlocks(String(data.text ?? "")).map((text, index) => ({ index, text }));
+  } catch (error) {
+    console.warn("pdf-parse failed; using Gemini PDF vision fallback", error);
+  }
   if (textBlocks.length === 0) textBlocks = await extractScannedPdfText(buffer);
+  if (textBlocks.length === 0) throw new Error("No text could be extracted from this PDF.");
   const images = await extractPdfImages(buffer, textBlocks);
   return { textBlocks, images };
 }
