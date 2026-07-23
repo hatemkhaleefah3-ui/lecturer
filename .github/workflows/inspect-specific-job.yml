@@ -1,0 +1,27 @@
+name: Inspect reported job
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch job status
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS \
+            https://lecturer.onrender.com/api/lecturer/jobs/594a0794-0a21-4335-ae7d-990ed17bc77f \
+            | tee job.json
+          python3 -m json.tool job.json
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reported-job-status
+          path: job.json
+          if-no-files-found: ignore
