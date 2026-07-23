@@ -3,7 +3,6 @@ import fs from "fs/promises";
 import path from "path";
 import type { SlideData, ExtractedImage, ChartData } from "./types.js";
 
-// Monochrome palette
 const C = {
   black: "0A0A0A",
   nearBlack: "1A1A1A",
@@ -13,90 +12,101 @@ const C = {
   veryLight: "F2F2F2",
   white: "FFFFFF",
 };
-
 const FONT = "Arial";
-const CHART_COLORS = ["0A0A0A", "404040", "757575", "A0A0A0", "C0C0C0", "E0E0E0"];
-
-// Slide dimensions: LAYOUT_WIDE = 10" x 5.63"
 const W = 10;
 const H = 5.63;
-const MARGIN = 0.4;
-const CONTENT_W = W - MARGIN * 2;
-const TITLE_H = 0.65;
-const TITLE_Y = 0.3;
-const BODY_Y = TITLE_Y + TITLE_H + 0.1;
-const BODY_H = H - BODY_Y - MARGIN;
+const M = 0.4;
+const CONTENT_W = W - M * 2;
+const BODY_Y = 1.05;
+const BODY_H = H - BODY_Y - M;
+const CHART_COLORS = [C.black, "404040", C.medGray, "A0A0A0", "C0C0C0", "E0E0E0"];
 
-function addSlideTitle(
-  pSlide: PptxGenJS.Slide,
-  title: string,
-  color = C.black,
-  fontSize = 18,
-): void {
-  pSlide.addText(title, {
-    x: MARGIN,
-    y: TITLE_Y,
-    w: CONTENT_W,
-    h: TITLE_H,
-    fontFace: FONT,
-    fontSize,
-    bold: true,
-    color,
-    align: "left",
-  });
+function addShape(slide: PptxGenJS.Slide, type: string, options: Record<string, unknown>): void {
+  slide.addShape(type as never, options as never);
 }
 
-function addDivider(pSlide: PptxGenJS.Slide, y: number): void {
-  pSlide.addShape(PptxGenJS.ShapeType.line, {
-    x: MARGIN,
-    y,
+function addTitle(slide: PptxGenJS.Slide, title = ""): void {
+  slide.addText(title, {
+    x: M,
+    y: 0.28,
+    w: CONTENT_W,
+    h: 0.6,
+    fontFace: FONT,
+    fontSize: 18,
+    bold: true,
+    color: C.black,
+    margin: 0,
+  });
+  addShape(slide, "line", {
+    x: M,
+    y: 0.95,
     w: CONTENT_W,
     h: 0,
     line: { color: C.lightGray, width: 0.75 },
   });
 }
 
-function renderTitle(pSlide: PptxGenJS.Slide, slide: SlideData): void {
-  pSlide.background = { color: C.white };
-
-  // Centered large title
-  pSlide.addText(slide.title ?? "Untitled", {
-    x: MARGIN,
-    y: 1.2,
-    w: CONTENT_W,
-    h: 1.4,
+function addBody(slide: PptxGenJS.Slide, body = "", x = M, w = CONTENT_W): void {
+  slide.addText(body, {
+    x,
+    y: BODY_Y + 0.12,
+    w,
+    h: BODY_H - 0.12,
     fontFace: FONT,
-    fontSize: 36,
+    fontSize: 13,
+    color: C.darkGray,
+    valign: "top",
+    margin: 0.05,
+    breakLine: false,
+    fit: "shrink",
+  });
+}
+
+function renderTitle(slide: PptxGenJS.Slide, data: SlideData): void {
+  slide.background = { color: C.white };
+  slide.addText(data.title ?? "Untitled", {
+    x: M,
+    y: 1.15,
+    w: CONTENT_W,
+    h: 1.35,
+    fontFace: FONT,
+    fontSize: 34,
     bold: true,
     color: C.black,
     align: "center",
     valign: "middle",
+    margin: 0,
+    fit: "shrink",
   });
-
-  // Divider
-  addDivider(pSlide, 2.8);
-
-  // Subtitle
-  if (slide.subtitle) {
-    pSlide.addText(slide.subtitle, {
-      x: MARGIN,
-      y: 3.0,
+  addShape(slide, "line", {
+    x: M,
+    y: 2.8,
+    w: CONTENT_W,
+    h: 0,
+    line: { color: C.lightGray, width: 0.75 },
+  });
+  if (data.subtitle) {
+    slide.addText(data.subtitle, {
+      x: M,
+      y: 3.05,
       w: CONTENT_W,
-      h: 0.7,
+      h: 0.8,
       fontFace: FONT,
       fontSize: 18,
       color: C.darkGray,
       align: "center",
+      valign: "middle",
+      margin: 0,
+      fit: "shrink",
     });
   }
 }
 
-function renderSectionHeader(pSlide: PptxGenJS.Slide, slide: SlideData): void {
-  pSlide.background = { color: C.nearBlack };
-
-  pSlide.addText(slide.title ?? "", {
-    x: MARGIN,
-    y: 1.5,
+function renderSection(slide: PptxGenJS.Slide, data: SlideData): void {
+  slide.background = { color: C.nearBlack };
+  slide.addText(data.title ?? "", {
+    x: M,
+    y: 1.45,
     w: CONTENT_W,
     h: 1.5,
     fontFace: FONT,
@@ -105,298 +115,188 @@ function renderSectionHeader(pSlide: PptxGenJS.Slide, slide: SlideData): void {
     color: C.white,
     align: "center",
     valign: "middle",
+    margin: 0,
+    fit: "shrink",
   });
-
-  if (slide.subtitle) {
-    pSlide.addText(slide.subtitle, {
-      x: MARGIN,
+  if (data.subtitle) {
+    slide.addText(data.subtitle, {
+      x: M,
       y: 3.2,
       w: CONTENT_W,
-      h: 0.6,
+      h: 0.7,
       fontFace: FONT,
       fontSize: 16,
       color: C.lightGray,
       align: "center",
+      margin: 0,
+      fit: "shrink",
     });
   }
 }
 
 function renderContent(
-  pSlide: PptxGenJS.Slide,
-  slide: SlideData,
+  slide: PptxGenJS.Slide,
+  data: SlideData,
   imageMap: Map<number, ExtractedImage>,
 ): void {
-  pSlide.background = { color: C.white };
-  addSlideTitle(pSlide, slide.title ?? "");
-  addDivider(pSlide, BODY_Y);
-
-  const hasImages = slide.images && slide.images.length > 0;
-  const textW = hasImages ? CONTENT_W * 0.57 : CONTENT_W;
-  const imgX = MARGIN + CONTENT_W * 0.6;
-  const imgW = CONTENT_W * 0.37;
-
-  if (slide.body) {
-    pSlide.addText(slide.body, {
-      x: MARGIN,
-      y: BODY_Y + 0.15,
-      w: textW,
-      h: BODY_H - 0.15,
-      fontFace: FONT,
-      fontSize: 13,
-      color: C.darkGray,
-      valign: "top",
-      wrap: true,
+  slide.background = { color: C.white };
+  addTitle(slide, data.title);
+  const imageRef = data.images?.[0];
+  const image = imageRef ? imageMap.get(imageRef.originalIndex) ?? imageRef : undefined;
+  const hasImage = Boolean(image?.dataBase64 && image?.mimeType);
+  addBody(slide, data.body ?? data.subtitle ?? "", M, hasImage ? CONTENT_W * 0.57 : CONTENT_W);
+  if (hasImage && image?.dataBase64 && image.mimeType) {
+    slide.addImage({
+      data: `data:${image.mimeType};base64,${image.dataBase64}`,
+      x: M + CONTENT_W * 0.61,
+      y: BODY_Y + 0.12,
+      w: CONTENT_W * 0.36,
+      h: BODY_H - 0.12,
+      sizing: { type: "contain", w: CONTENT_W * 0.36, h: BODY_H - 0.12 },
     });
   }
-
-  if (hasImages && slide.images) {
-    const img = slide.images[0];
-    const imgData = imageMap.get(img.originalIndex) ?? img;
-    if (imgData.dataBase64 && imgData.mimeType) {
-      try {
-        pSlide.addImage({
-          data: `data:${imgData.mimeType};base64,${imgData.dataBase64}`,
-          x: imgX,
-          y: BODY_Y + 0.15,
-          w: imgW,
-          h: BODY_H - 0.15,
-          sizing: { type: "contain", w: imgW, h: BODY_H - 0.15 },
-        });
-      } catch {
-        // If image embed fails, add a placeholder text
-        pSlide.addText(`[Image ${img.originalIndex}]`, {
-          x: imgX,
-          y: BODY_Y + 0.15,
-          w: imgW,
-          h: BODY_H - 0.15,
-          fontFace: FONT,
-          fontSize: 11,
-          color: C.medGray,
-          align: "center",
-          valign: "middle",
-        });
-      }
-    }
-  }
 }
 
-function renderDataTable(pSlide: PptxGenJS.Slide, slide: SlideData): void {
-  pSlide.background = { color: C.white };
-  addSlideTitle(pSlide, slide.title ?? "");
-  addDivider(pSlide, BODY_Y);
-
-  const headers = slide.tableHeaders ?? [];
-  const rows = slide.tableRows ?? [];
-
-  if (headers.length === 0 && rows.length === 0) return;
-
-  // Build table data: header row + data rows
-  type TableCell = {
-    text: string;
-    options: {
-      fill: { color: string };
-      color: string;
-      bold: boolean;
-      fontFace: string;
-      fontSize: number;
-      align: "left";
-      border: { pt: number; color: string };
-      valign: "middle";
-    };
-  };
-
-  const allRows: TableCell[][] = [];
-
-  if (headers.length > 0) {
-    allRows.push(
-      headers.map((h) => ({
-        text: h,
-        options: {
-          fill: { color: C.nearBlack },
-          color: C.white,
-          bold: true,
-          fontFace: FONT,
-          fontSize: 11,
-          align: "left" as const,
-          border: { pt: 0.5, color: C.lightGray },
-          valign: "middle" as const,
-        },
+function renderTable(slide: PptxGenJS.Slide, data: SlideData): void {
+  slide.background = { color: C.white };
+  addTitle(slide, data.title);
+  const headers = (data.tableHeaders ?? []).map(String);
+  const rows = (data.tableRows ?? []).map((row) => row.map(String));
+  const width = Math.max(headers.length, ...rows.map((row) => row.length), 1);
+  const normalizedRows = rows.map((row) => [
+    ...row,
+    ...Array(Math.max(0, width - row.length)).fill(""),
+  ]);
+  const tableRows: Array<Array<string | { text: string; options: Record<string, unknown> }>> = [];
+  if (headers.length) {
+    tableRows.push(
+      [...headers, ...Array(Math.max(0, width - headers.length)).fill("")].map((text) => ({
+        text,
+        options: { fill: { color: C.nearBlack }, color: C.white, bold: true },
       })),
     );
   }
-
-  rows.forEach((row, rowIdx) => {
-    allRows.push(
-      row.map((cell) => ({
-        text: cell,
-        options: {
-          fill: { color: rowIdx % 2 === 0 ? C.veryLight : C.white },
-          color: C.darkGray,
-          bold: false,
-          fontFace: FONT,
-          fontSize: 10,
-          align: "left" as const,
-          border: { pt: 0.5, color: C.lightGray },
-          valign: "middle" as const,
-        },
-      })),
-    );
-  });
-
-  const numCols = Math.max(headers.length, ...rows.map((r) => r.length));
-  const colW = CONTENT_W / Math.max(numCols, 1);
-
-  pSlide.addTable(allRows, {
-    x: MARGIN,
-    y: BODY_Y + 0.15,
+  tableRows.push(...normalizedRows);
+  if (!tableRows.length) {
+    addBody(slide, data.body ?? "");
+    return;
+  }
+  slide.addTable(tableRows as never, {
+    x: M,
+    y: BODY_Y + 0.12,
     w: CONTENT_W,
-    rowH: 0.35,
-    colW: Array(numCols).fill(colW),
-  });
+    h: BODY_H - 0.12,
+    colW: Array(width).fill(CONTENT_W / width),
+    fontFace: FONT,
+    fontSize: 10,
+    color: C.darkGray,
+    border: { pt: 0.5, color: C.lightGray },
+    margin: 0.05,
+    autoFit: false,
+  } as never);
 }
 
-function renderChart(pSlide: PptxGenJS.Slide, slide: SlideData): void {
-  pSlide.background = { color: C.white };
-  addSlideTitle(pSlide, slide.title ?? "");
-  addDivider(pSlide, BODY_Y);
+function validChartData(value: ChartData | undefined): value is ChartData {
+  return Boolean(
+    value?.labels?.length &&
+      value.datasets?.length &&
+      value.datasets.every(
+        (dataset) =>
+          Array.isArray(dataset.values) &&
+          dataset.values.length === value.labels.length &&
+          dataset.values.every((item) => Number.isFinite(Number(item))),
+      ),
+  );
+}
 
-  const chartData: ChartData = slide.chartData ?? {
-    labels: ["A", "B", "C"],
-    datasets: [{ label: "Value", values: [1, 2, 3] }],
-  };
-
-  const pptxChartData = chartData.datasets.map((ds) => ({
-    name: ds.label,
+function renderChart(slide: PptxGenJS.Slide, data: SlideData): void {
+  slide.background = { color: C.white };
+  addTitle(slide, data.title);
+  if (!validChartData(data.chartData)) {
+    addBody(slide, data.body ?? "Chart data was unavailable or invalid.");
+    return;
+  }
+  const chartData = data.chartData;
+  const series = chartData.datasets.map((dataset) => ({
+    name: dataset.label || "Value",
     labels: chartData.labels,
-    values: ds.values,
+    values: dataset.values.map(Number),
   }));
-
-  const chartTypeMap: Record<string, PptxGenJS.CHART_NAME> = {
-    bar: "bar",
-    line: "line",
-    pie: "pie",
-  } as Record<string, PptxGenJS.CHART_NAME>;
-
-  const chartType = chartTypeMap[slide.chartType ?? "bar"] ?? "bar";
-
-  pSlide.addChart(chartType, pptxChartData, {
-    x: MARGIN,
-    y: BODY_Y + 0.15,
+  const chartType = ["bar", "line", "pie"].includes(data.chartType ?? "")
+    ? (data.chartType as "bar" | "line" | "pie")
+    : "bar";
+  slide.addChart(chartType as never, series as never, {
+    x: M,
+    y: BODY_Y + 0.12,
     w: CONTENT_W,
-    h: BODY_H - 0.15,
+    h: BODY_H - 0.12,
     chartColors: CHART_COLORS,
-    showLegend: chartData.datasets.length > 1,
+    showLegend: series.length > 1,
     legendPos: "b",
     showTitle: false,
     valAxisLineColor: C.lightGray,
     catAxisLineColor: C.lightGray,
-    valGridLine: { style: "solid", color: C.veryLight },
     dataLabelColor: C.darkGray,
     dataLabelFontSize: 9,
-  });
+  } as never);
 }
 
-function renderComparison(pSlide: PptxGenJS.Slide, slide: SlideData): void {
-  pSlide.background = { color: C.white };
-  addSlideTitle(pSlide, slide.title ?? "");
-  addDivider(pSlide, BODY_Y);
-
-  const colW = (CONTENT_W - 0.15) / 2;
-  const rightX = MARGIN + colW + 0.15;
-
-  // Left column
-  pSlide.addText(slide.leftColumn ?? "", {
-    x: MARGIN,
-    y: BODY_Y + 0.2,
-    w: colW,
-    h: BODY_H - 0.2,
-    fontFace: FONT,
-    fontSize: 12,
-    color: C.darkGray,
-    valign: "top",
-    wrap: true,
-  });
-
-  // Vertical divider
-  pSlide.addShape(PptxGenJS.ShapeType.line, {
-    x: MARGIN + colW + 0.07,
-    y: BODY_Y + 0.2,
+function renderComparison(slide: PptxGenJS.Slide, data: SlideData): void {
+  slide.background = { color: C.white };
+  addTitle(slide, data.title);
+  const gap = 0.18;
+  const colW = (CONTENT_W - gap) / 2;
+  addBody(slide, data.leftColumn ?? "", M, colW);
+  addShape(slide, "line", {
+    x: M + colW + gap / 2,
+    y: BODY_Y + 0.12,
     w: 0,
-    h: BODY_H - 0.2,
+    h: BODY_H - 0.12,
     line: { color: C.lightGray, width: 1 },
   });
-
-  // Right column
-  pSlide.addText(slide.rightColumn ?? "", {
-    x: rightX,
-    y: BODY_Y + 0.2,
-    w: colW,
-    h: BODY_H - 0.2,
-    fontFace: FONT,
-    fontSize: 12,
-    color: C.darkGray,
-    valign: "top",
-    wrap: true,
-  });
+  addBody(slide, data.rightColumn ?? "", M + colW + gap, colW);
 }
 
-function renderCallout(pSlide: PptxGenJS.Slide, slide: SlideData): void {
-  pSlide.background = { color: C.white };
-  addSlideTitle(pSlide, slide.title ?? "");
-  addDivider(pSlide, BODY_Y);
-
-  const styleLabels: Record<string, string> = {
+function renderCallout(slide: PptxGenJS.Slide, data: SlideData): void {
+  slide.background = { color: C.white };
+  addTitle(slide, data.title);
+  addShape(slide, "roundRect", {
+    x: M,
+    y: BODY_Y + 0.18,
+    w: CONTENT_W,
+    h: BODY_H - 0.18,
+    rectRadius: 0.05,
+    fill: { color: C.veryLight },
+    line: { color: C.lightGray, width: 1 },
+  });
+  const labels: Record<string, string> = {
     definition: "DEFINITION",
     warning: "WARNING",
     takeaway: "KEY TAKEAWAY",
   };
-
-  const label = styleLabels[slide.calloutStyle ?? "takeaway"] ?? "NOTE";
-
-  // Callout box background
-  pSlide.addShape(PptxGenJS.ShapeType.roundRect, {
-    x: MARGIN,
-    y: BODY_Y + 0.2,
-    w: CONTENT_W,
-    h: BODY_H - 0.2,
-    fill: { color: C.veryLight },
-    line: { color: C.lightGray, width: 1 },
-  });
-
-  // Left accent bar
-  pSlide.addShape(PptxGenJS.ShapeType.rect, {
-    x: MARGIN,
-    y: BODY_Y + 0.2,
-    w: 0.08,
-    h: BODY_H - 0.2,
-    fill: { color: C.nearBlack },
-    line: { color: C.nearBlack, width: 0 },
-  });
-
-  // Style label
-  pSlide.addText(label, {
-    x: MARGIN + 0.2,
+  slide.addText(labels[data.calloutStyle ?? "takeaway"] ?? "NOTE", {
+    x: M + 0.22,
     y: BODY_Y + 0.35,
-    w: CONTENT_W - 0.3,
+    w: CONTENT_W - 0.4,
     h: 0.3,
     fontFace: FONT,
     fontSize: 9,
     bold: true,
     color: C.medGray,
     charSpacing: 2,
+    margin: 0,
   });
-
-  // Body text
-  pSlide.addText(slide.body ?? "", {
-    x: MARGIN + 0.2,
-    y: BODY_Y + 0.75,
-    w: CONTENT_W - 0.3,
-    h: BODY_H - 0.75,
+  slide.addText(data.body ?? "", {
+    x: M + 0.22,
+    y: BODY_Y + 0.78,
+    w: CONTENT_W - 0.44,
+    h: BODY_H - 0.9,
     fontFace: FONT,
     fontSize: 14,
     color: C.black,
     valign: "top",
-    wrap: true,
+    margin: 0,
+    fit: "shrink",
   });
 }
 
@@ -406,43 +306,44 @@ export async function generatePptxFile(
   outputPath: string,
 ): Promise<void> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  const pptx = new PptxGenJS();
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.author = "Lecturer";
+  pptx.company = "Lecturer";
+  pptx.title = "Lecturer Deck";
+  pptx.subject = "Generated by Lecturer";
+  pptx.lang = "en-US";
+  pptx.theme = {
+    headFontFace: FONT,
+    bodyFontFace: FONT,
+    lang: "en-US",
+  };
 
-  const prs = new PptxGenJS();
-  prs.layout = "LAYOUT_WIDE";
-  prs.title = "Lecturer Deck";
-  prs.subject = "Generated by Lecturer";
-
-  const imageMap = new Map(allImages.map((img) => [img.index, img]));
-
-  for (const slide of slides) {
-    const pSlide = prs.addSlide();
-
-    switch (slide.type) {
+  const imageMap = new Map(allImages.map((image) => [image.index, image]));
+  for (const data of slides) {
+    const slide = pptx.addSlide();
+    switch (data.type) {
       case "title":
-        renderTitle(pSlide, slide);
+        renderTitle(slide, data);
         break;
       case "section_header":
-        renderSectionHeader(pSlide, slide);
-        break;
-      case "content":
-        renderContent(pSlide, slide, imageMap);
+        renderSection(slide, data);
         break;
       case "data_table":
-        renderDataTable(pSlide, slide);
+        renderTable(slide, data);
         break;
       case "chart":
-        renderChart(pSlide, slide);
+        renderChart(slide, data);
         break;
       case "comparison":
-        renderComparison(pSlide, slide);
+        renderComparison(slide, data);
         break;
       case "callout":
-        renderCallout(pSlide, slide);
+        renderCallout(slide, data);
         break;
       default:
-        renderContent(pSlide, slide, imageMap);
+        renderContent(slide, data, imageMap);
     }
   }
-
-  await prs.writeFile({ fileName: outputPath });
+  await pptx.writeFile({ fileName: outputPath });
 }
