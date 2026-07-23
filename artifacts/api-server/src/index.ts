@@ -1,22 +1,22 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { pool } from "@workspace/db";
+import { hasDatabase, pool } from "@workspace/db";
 
-const rawPort = process.env["PORT"];
-
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
+const rawPort = process.env["PORT"] ?? "3000";
 const port = Number(rawPort);
 
-if (Number.isNaN(port) || port <= 0) {
+if (Number.isNaN(port) || port <= 0 || port > 65535) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
 async function ensureDatabaseSchema(): Promise<void> {
+  if (!hasDatabase) {
+    logger.warn(
+      "DATABASE_URL is not configured; health checks and the web interface remain available, but lecturer jobs are disabled",
+    );
+    return;
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS lecturer_jobs (
       id text PRIMARY KEY,
@@ -37,9 +37,9 @@ async function ensureDatabaseSchema(): Promise<void> {
     )
   `);
 
-  // Processing currently runs inside this web process. If Render restarts the
-  // instance, those in-memory tasks cannot resume. Mark their database rows as
-  // failed instead of leaving the UI permanently stuck at the last percentage.
+  // Processing currently runs inside this web process. If the process restarts,
+  // those in-memory tasks cannot resume. Mark their database rows as failed
+  // instead of leaving the UI permanently stuck at the last percentage.
   const orphaned = await pool.query(`
     UPDATE lecturer_jobs
     SET
@@ -62,10 +62,12 @@ async function ensureDatabaseSchema(): Promise<void> {
 async function start(): Promise<void> {
   try {
     await ensureDatabaseSchema();
-    logger.info("Database schema is ready");
+    if (hasDatabase) logger.info("Database schema is ready");
   } catch (err) {
-    logger.error({ err }, "Failed to initialize database schema");
-    process.exit(1);
+    logger.error(
+      { err },
+      "Database initialization failed; continuing with database-backed routes unavailable",
+    );
   }
 
   app.listen(port, (err) => {
