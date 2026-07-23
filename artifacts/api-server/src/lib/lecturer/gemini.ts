@@ -7,6 +7,8 @@ import type {
   IntegrityReport,
 } from "./types.js";
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.6-flash";
+
 function getGenAI(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY environment variable is not set");
@@ -203,7 +205,7 @@ Return ONLY the JSON object.`;
   }
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: GEMINI_MODEL,
     contents: [{ role: "user", parts }],
     config: { responseMimeType: "application/json", maxOutputTokens: 16384 },
   });
