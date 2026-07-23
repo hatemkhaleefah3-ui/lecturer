@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 
 // pdf-parse bundles an older PDF.js build whose default font loader assumes a
 // browser DOM. Configure that shared module for Node before any PDF job runs;
-// otherwise PDFs with embedded fonts can crash the entire Render process with
+// otherwise PDFs with embedded fonts can crash the process with
 // `ReferenceError: document is not defined` during image extraction.
 try {
   const pdfjs = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
@@ -25,7 +25,7 @@ try {
 
 const app: Express = express();
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const frontendDir = path.resolve(currentDir, "../../lecturer-app/dist/public");
+const frontendDir = path.resolve(currentDir, "../public");
 const frontendIndex = path.join(frontendDir, "index.html");
 
 app.use(
@@ -53,9 +53,9 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-// Serve the editable Lecturer web interface from the same Render service.
-// Static assets are handled first; unknown non-API GET routes fall back to
-// index.html so client-side routes such as /jobs/:id continue to work.
+// Serve the editable Lecturer web interface from the same deployment. Static
+// assets are handled first; unknown non-API GET routes fall back to index.html
+// so client-side routes such as /jobs/:id continue to work.
 app.use(express.static(frontendDir));
 app.use((req, res, next) => {
   if (
