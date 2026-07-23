@@ -52,15 +52,20 @@ jobs:
           set -euo pipefail
           curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$JOB_ID/slides" -o slides.json
           curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$JOB_ID/download" -o result.pptx
-          unzip -t result.pptx
-          unzip -p result.pptx '[Content_Types].xml' | grep -q presentationml
-          unzip -p result.pptx ppt/slides/slide1.xml | grep -q '<a:t>'
           python3 - <<'PY'
-          import json
+          import json, zipfile
           data=json.load(open('slides.json'))
           assert data.get('slides'), data
           integrity=data.get('integrity') or {}
           assert integrity.get('textBlocksExtracted', 0) > 0, integrity
+          with zipfile.ZipFile('result.pptx') as z:
+              assert z.testzip() is None
+              names=set(z.namelist())
+              assert '[Content_Types].xml' in names
+              assert 'ppt/presentation.xml' in names
+              assert 'ppt/slides/slide1.xml' in names
+              assert b'presentationml' in z.read('[Content_Types].xml')
+              assert b'<a:t>' in z.read('ppt/slides/slide1.xml')
           PY
       - name: Upload evidence
         if: always()
