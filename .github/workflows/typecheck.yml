@@ -44,10 +44,35 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      - name: Upload build log
+      - name: Smoke test production start
+        shell: bash
+        env:
+          PORT: "4173"
+        run: |
+          pnpm start > start.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/api/healthz > health.json; then
+              cat health.json
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat start.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat start.log
+          exit 1
+
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: render-build-log
-          path: build.log
-          if-no-files-found: error
+          path: |
+            build.log
+            start.log
+            health.json
+          if-no-files-found: ignore
