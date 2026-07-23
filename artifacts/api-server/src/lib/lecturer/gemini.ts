@@ -9,10 +9,63 @@ import type {
 
 function getGenAI(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is not set");
-  }
+  if (!apiKey) throw new Error("GEMINI_API_KEY environment variable is not set");
   return new GoogleGenAI({ apiKey });
+}
+
+function slideText(slide: SlideData): string {
+  return [
+    slide.title,
+    slide.subtitle,
+    slide.body,
+    slide.leftColumn,
+    slide.rightColumn,
+    ...(slide.tableHeaders ?? []),
+    ...(slide.tableRows ?? []).flat(),
+    ...(slide.chartData?.labels ?? []),
+    ...(slide.chartData?.datasets ?? []).flatMap((dataset) => [
+      dataset.label,
+      ...dataset.values.map(String),
+    ]),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ");
+}
+
+function normalizedWords(text: string): string[] {
+  return text
+    .toLocaleLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function contentIsRetained(source: string, placed: string): boolean {
+  const sourceWords = normalizedWords(source);
+  const placedWords = normalizedWords(placed);
+  if (sourceWords.length === 0) return true;
+  if (placedWords.length === 0) return false;
+
+  const normalizedSource = sourceWords.join(" ");
+  const normalizedPlaced = placedWords.join(" ");
+  if (normalizedPlaced.includes(normalizedSource)) return true;
+
+  const placedSet = new Set(placedWords);
+  const distinctSource = [...new Set(sourceWords)];
+  const matched = distinctSource.filter((word) => placedSet.has(word)).length;
+  const threshold = distinctSource.length <= 5 ? 1 : 0.7;
+  return matched / distinctSource.length >= threshold;
+}
+
+function duplicates(values: number[]): number[] {
+  const counts = new Map<number, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([value]) => value)
+    .sort((a, b) => a - b);
 }
 
 function computeIntegrity(
@@ -20,34 +73,73 @@ function computeIntegrity(
   images: ExtractedImage[],
   slides: SlideData[],
 ): IntegrityReport {
-  const placedText = new Set<number>();
-  const placedImages = new Set<number>();
+  const validText = new Set(textBlocks.map((block) => block.index));
+  const validImages = new Set(images.map((image) => image.index));
+  const allTextRefs = slides.flatMap((slide) => slide.textBlockIndices ?? []);
+  const allImageRefs = slides.flatMap((slide) =>
+    (slide.images ?? []).map((image) => image.originalIndex),
+  );
+  const placedText = new Set(allTextRefs.filter((index) => validText.has(index)));
+  const placedImages = new Set(allImageRefs.filter((index) => validImages.has(index)));
 
+  const invalidTextIndices = [...new Set(allTextRefs.filter((index) => !validText.has(index)))].sort(
+    (a, b) => a - b,
+  );
+  const invalidImageIndices = [
+    ...new Set(allImageRefs.filter((index) => !validImages.has(index))),
+  ].sort((a, b) => a - b);
+  const duplicateTextIndices = duplicates(allTextRefs).filter((index) => validText.has(index));
+  const duplicateImageIndices = duplicates(allImageRefs).filter((index) => validImages.has(index));
+  const unplacedTextIndices = textBlocks
+    .map((block) => block.index)
+    .filter((index) => !placedText.has(index));
+  const unplacedImageIndices = images
+    .map((image) => image.index)
+    .filter((index) => !placedImages.has(index));
+
+  const slideByTextIndex = new Map<number, string[]>();
   for (const slide of slides) {
-    for (const idx of slide.textBlockIndices ?? []) {
-      placedText.add(idx);
-    }
-    for (const img of slide.images ?? []) {
-      placedImages.add(img.originalIndex);
+    const text = slideText(slide);
+    for (const index of slide.textBlockIndices ?? []) {
+      if (!validText.has(index)) continue;
+      const values = slideByTextIndex.get(index) ?? [];
+      values.push(text);
+      slideByTextIndex.set(index, values);
     }
   }
 
-  const unplacedTextIndices = textBlocks
-    .map((b) => b.index)
-    .filter((i) => !placedText.has(i));
-  const unplacedImageIndices = images
-    .map((img) => img.index)
-    .filter((i) => !placedImages.has(i));
+  const referencedButMissingTextIndices = textBlocks
+    .filter((block) => {
+      const destinations = slideByTextIndex.get(block.index);
+      return destinations && !destinations.some((text) => contentIsRetained(block.text, text));
+    })
+    .map((block) => block.index);
+  const textBlocksRetained = textBlocks.length - unplacedTextIndices.length - referencedButMissingTextIndices.length;
+  const textRetentionPct =
+    textBlocks.length === 0 ? 100 : Math.round((textBlocksRetained / textBlocks.length) * 10_000) / 100;
 
   return {
     textBlocksExtracted: textBlocks.length,
     textBlocksPlaced: placedText.size,
+    textBlocksRetained,
     imagesExtracted: images.length,
     imagesPlaced: placedImages.size,
     unplacedTextIndices,
     unplacedImageIndices,
+    duplicateTextIndices,
+    duplicateImageIndices,
+    invalidTextIndices,
+    invalidImageIndices,
+    referencedButMissingTextIndices,
+    textRetentionPct,
     allPlaced:
-      unplacedTextIndices.length === 0 && unplacedImageIndices.length === 0,
+      unplacedTextIndices.length === 0 &&
+      unplacedImageIndices.length === 0 &&
+      duplicateTextIndices.length === 0 &&
+      duplicateImageIndices.length === 0 &&
+      invalidTextIndices.length === 0 &&
+      invalidImageIndices.length === 0 &&
+      referencedButMissingTextIndices.length === 0,
   };
 }
 
@@ -57,21 +149,19 @@ export async function analyzeWithGemini(
   filename: string,
 ): Promise<SlidesResult> {
   const ai = getGenAI();
-
   const textSection = textBlocks
     .map(
-      (b) =>
-        `[Block ${b.index}]${b.pageNum ? ` (page ${b.pageNum})` : ""}: ${b.text}`,
+      (block) =>
+        `[Block ${block.index}]${block.pageNum ? ` (page ${block.pageNum})` : ""}: ${block.text}`,
     )
     .join("\n\n");
-
   const imageSection =
     images.length > 0
       ? `\nIMAGES EXTRACTED (${images.length} total):\n` +
         images
           .map(
-            (img) =>
-              `[Image ${img.index}]: ${img.altText ?? "untitled image"}`,
+            (image) =>
+              `[Image ${image.index}]${image.pageNum ? ` (page ${image.pageNum})` : ""}${image.nearTextIndex !== undefined ? ` near Block ${image.nearTextIndex}` : ""}: ${image.altText ?? "untitled image"}`,
           )
           .join("\n")
       : "\nNo images extracted from this file.";
@@ -82,106 +172,68 @@ EXTRACTED TEXT BLOCKS (${textBlocks.length} total):
 ${textSection}
 ${imageSection}
 
-Return ONLY valid JSON (no markdown fences, no explanation text) with this exact structure:
-{
-  "slides": [
-    {
-      "index": 0,
-      "type": "title",
-      "title": "...",
-      "subtitle": "...",
-      "images": [],
-      "textBlockIndices": [0]
-    }
-  ]
-}
+Return ONLY valid JSON with this structure: {"slides":[{"index":0,"type":"title","title":"...","subtitle":"...","images":[],"textBlockIndices":[0]}]}.
 
-SLIDE TYPES AND THEIR FIELDS:
-- "title": { title, subtitle?, images?, textBlockIndices } — use exactly once at the beginning
-- "section_header": { title, subtitle?, textBlockIndices } — major section dividers (2-5 per deck)
-- "content": { title, body, images?: [{originalIndex}], textBlockIndices } — standard content slide
-- "data_table": { title, tableHeaders: string[], tableRows: string[][], textBlockIndices } — for tabular/structured data
-- "chart": { title, chartType: "bar"|"line"|"pie", chartData: { labels: string[], datasets: [{label: string, values: number[]}] }, textBlockIndices } — for numeric data that can be visualized
-- "comparison": { title, leftColumn: string, rightColumn: string, textBlockIndices } — comparing two concepts/approaches
-- "callout": { title, body, calloutStyle: "definition"|"warning"|"takeaway", textBlockIndices } — definitions, warnings, or key takeaways
+SLIDE TYPES:
+- title: title, subtitle?, images?, textBlockIndices
+- section_header: title, subtitle?, images?, textBlockIndices
+- content: title, body, images?, textBlockIndices
+- data_table: title, tableHeaders, tableRows, images?, textBlockIndices
+- chart: title, chartType, chartData, images?, textBlockIndices
+- comparison: title, leftColumn, rightColumn, images?, textBlockIndices
+- callout: title, body, calloutStyle, images?, textBlockIndices
 
-RULES:
-1. CRITICAL: Every text block index from 0 to ${textBlocks.length - 1} MUST appear in exactly one slide's textBlockIndices
-2. Each image index (0 to ${images.length - 1}) should appear in at most one slide's images array — assign it to the most semantically relevant slide
-3. Do NOT preserve the original content order — create a new logical, professional structure
-4. Aim for 8-20 slides total
-5. Use diverse slide types — aim to use all 7 types at least once if content permits
-6. Keep titles concise (max 8 words)
-7. For "content" slides, keep body to 2-4 sentences
-8. For "comparison" slides, each column should be 2-3 sentences
-9. For "chart" slides, extract numeric data from the text into chartData — use realistic values from the content
-10. For "data_table" slides, structure tabular data from the text into rows and columns
+RETENTION RULES:
+1. Every text block index from 0 to ${textBlocks.length - 1} must appear exactly once.
+2. Every assigned block's factual content, numbers, equations, labels, definitions, and qualifications must be present in that slide's visible fields. Do not merely reference an index while omitting its content.
+3. Every image index from 0 to ${images.length - 1} must appear exactly once when images exist. Prefer the slide containing its nearTextIndex.
+4. Never invent chart values. Use a chart only when the source provides explicit numeric values.
+5. Reorganize for clarity, but do not discard or materially alter source content.
+6. Use one title slide, concise titles, and as many slides as necessary to preserve all content legibly.
 
 Return ONLY the JSON object.`;
 
-  // Include small images as inline data (up to 8 images, max 0.5MB in base64)
   const inlineImages = images
-    .filter((img) => img.dataBase64.length < 700_000)
+    .filter((image) => image.dataBase64.length < 700_000)
     .slice(0, 8);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const parts: any[] = [{ text: prompt }];
-  for (const img of inlineImages) {
-    parts.push({ text: `\n[Image ${img.index} visual content:]` });
-    parts.push({
-      inlineData: {
-        mimeType: img.mimeType,
-        data: img.dataBase64,
-      },
-    });
+  for (const image of inlineImages) {
+    parts.push({ text: `\n[Image ${image.index} visual content:]` });
+    parts.push({ inlineData: { mimeType: image.mimeType, data: image.dataBase64 } });
   }
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [{ role: "user", parts }],
-    config: {
-      responseMimeType: "application/json",
-      maxOutputTokens: 8192,
-    },
+    config: { responseMimeType: "application/json", maxOutputTokens: 16384 },
   });
-
   const jsonText = response.text;
-  if (!jsonText) {
-    throw new Error("Empty response from Gemini API");
-  }
+  if (!jsonText) throw new Error("Empty response from Gemini API");
 
   let parsed: { slides: SlideData[] };
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    throw new Error(
-      `Failed to parse Gemini response as JSON: ${jsonText.slice(0, 300)}`,
-    );
+    throw new Error(`Failed to parse Gemini response as JSON: ${jsonText.slice(0, 300)}`);
   }
-
-  if (!parsed.slides || !Array.isArray(parsed.slides)) {
+  if (!Array.isArray(parsed.slides)) {
     throw new Error("Invalid Gemini response: missing slides array");
   }
 
   const integrity = computeIntegrity(textBlocks, images, parsed.slides);
-
-  // Attach image data to slide images (for PPTX generation)
-  const imageMap = new Map(images.map((img) => [img.index, img]));
+  const imageMap = new Map(images.map((image) => [image.index, image]));
   for (const slide of parsed.slides) {
-    if (slide.images && slide.images.length > 0) {
-      slide.images = slide.images.map((si) => {
-        const img = imageMap.get(si.originalIndex);
-        if (img) {
-          return {
-            originalIndex: si.originalIndex,
-            dataBase64: img.dataBase64,
-            mimeType: img.mimeType,
-            altText: img.altText,
-          };
-        }
-        return si;
-      });
-    }
+    slide.images = (slide.images ?? []).map((slideImage) => {
+      const image = imageMap.get(slideImage.originalIndex);
+      return image
+        ? {
+            originalIndex: slideImage.originalIndex,
+            dataBase64: image.dataBase64,
+            mimeType: image.mimeType,
+            altText: image.altText,
+          }
+        : slideImage;
+    });
   }
 
   return { slides: parsed.slides, integrity };
