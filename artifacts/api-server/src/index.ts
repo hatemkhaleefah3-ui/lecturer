@@ -28,6 +28,7 @@ app.get("/api/healthz", (_req, res) => {
 
 let databaseReady: Promise<void> | undefined;
 let lecturerRouter: Promise<RequestHandler> | undefined;
+let converterRouter: Promise<RequestHandler> | undefined;
 
 function ensureDatabase(): Promise<void> {
   databaseReady ??= import("@workspace/db").then(async ({ pool }) => {
@@ -62,7 +63,25 @@ function getLecturerRouter(): Promise<RequestHandler> {
   return lecturerRouter;
 }
 
+function getConverterRouter(): Promise<RequestHandler> {
+  converterRouter ??= import("./routes/lecturer/convert.js").then(
+    ({ default: router }) => router as unknown as RequestHandler,
+  );
+  return converterRouter;
+}
+
 app.use("/api", async (req, res, next) => {
+  if (req.method === "POST" && req.path === "/lecturer/convert") {
+    try {
+      const router = await getConverterRouter();
+      router(req, res, next);
+    } catch (error) {
+      console.error("Failed to initialize stateless Lecturer converter", error);
+      res.status(500).json({ error: "Failed to initialize document conversion" });
+    }
+    return;
+  }
+
   if (!req.path.startsWith("/lecturer")) {
     next();
     return;
@@ -71,7 +90,7 @@ app.use("/api", async (req, res, next) => {
   if (!process.env.DATABASE_URL) {
     res.status(503).json({
       error:
-        "Lecturer job processing is unavailable because DATABASE_URL is not configured in Vercel.",
+        "The legacy job API requires DATABASE_URL. Use POST /api/lecturer/convert for stateless conversion.",
     });
     return;
   }
