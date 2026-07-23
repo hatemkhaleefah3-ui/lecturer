@@ -1,0 +1,1 @@
+Verification trigger retained for CI visibility.
