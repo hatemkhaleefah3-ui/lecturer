@@ -1,0 +1,101 @@
+name: Live Render PDF E2E
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  live-pdf-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Create PDF fixture
+        shell: python
+        run: |
+          from pathlib import Path
+
+          text = "Cellular Respiration\\nGlycolysis produces pyruvate, ATP, and NADH.\\nThe citric acid cycle occurs in the mitochondrial matrix.\\nOxidative phosphorylation uses the electron transport chain and ATP synthase."
+          lines = text.split("\\n")
+          stream_parts = ["BT", "/F1 18 Tf", "72 720 Td"]
+          for i, line in enumerate(lines):
+              escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+              if i:
+                  stream_parts.append("0 -28 Td")
+              stream_parts.append(f"({escaped}) Tj")
+          stream_parts.append("ET")
+          stream = "\\n".join(stream_parts).encode("ascii")
+
+          objects = []
+          objects.append(b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\\n")
+          objects.append(b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\\n")
+          objects.append(b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>endobj\\n")
+          objects.append(b"4 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\\n")
+          objects.append(b"5 0 obj<< /Length " + str(len(stream)).encode() + b" >>stream\\n" + stream + b"\\nendstream endobj\\n")
+
+          pdf = bytearray(b"%PDF-1.4\\n")
+          offsets = [0]
+          for obj in objects:
+              offsets.append(len(pdf))
+              pdf.extend(obj)
+          xref = len(pdf)
+          pdf.extend(f"xref\\n0 {len(objects)+1}\\n".encode())
+          pdf.extend(b"0000000000 65535 f \\n")
+          for off in offsets[1:]:
+              pdf.extend(f"{off:010d} 00000 n \\n".encode())
+          pdf.extend(f"trailer<< /Size {len(objects)+1} /Root 1 0 R >>\\nstartxref\\n{xref}\\n%%EOF\\n".encode())
+          Path("lecture.pdf").write_bytes(pdf)
+      - name: Wait for Render
+        run: |
+          for attempt in {1..60}; do
+            code=$(curl -sS -o /tmp/home -w '%{http_code}' https://lecturer.onrender.com/ || true)
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Upload PDF and poll
+        run: |
+          set -euo pipefail
+          response=$(curl --fail-with-body -sS -F 'file=@lecture.pdf;type=application/pdf' https://lecturer.onrender.com/api/lecturer/jobs)
+          echo "$response" | tee upload.json
+          id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$response")
+          echo "JOB_ID=$id" >> "$GITHUB_ENV"
+          for attempt in {1..120}; do
+            curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$id" -o status.json
+            cat status.json
+            status=$(python3 -c 'import json; print(json.load(open("status.json"))["status"])')
+            [ "$status" = completed ] && exit 0
+            if [ "$status" = failed ]; then python3 -c 'import json; d=json.load(open("status.json")); raise SystemExit(d.get("error"))'; fi
+            sleep 5
+          done
+          exit 1
+      - name: Validate output
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$JOB_ID/slides" -o slides.json
+          curl --fail-with-body -sS "https://lecturer.onrender.com/api/lecturer/jobs/$JOB_ID/download" -o result.pptx
+          unzip -t result.pptx
+          unzip -p result.pptx '[Content_Types].xml' > content-types.xml
+          grep -q presentationml content-types.xml
+          unzip -p result.pptx ppt/slides/slide1.xml > slide1.xml
+          grep -q '<a:t>' slide1.xml
+          python3 - <<'PY'
+          import json
+          data=json.load(open('slides.json'))
+          assert data.get('slides'), data
+          integrity=data.get('integrity') or {}
+          assert integrity.get('textBlocksExtracted', 0) > 0, integrity
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-pdf-e2e-evidence
+          path: |
+            upload.json
+            status.json
+            slides.json
+            result.pptx
+          if-no-files-found: ignore
