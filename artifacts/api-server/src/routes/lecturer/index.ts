@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs/promises";
 import { createReadStream } from "fs";
 import { v4 as uuid } from "uuid";
-import { db, lecturerJobsTable } from "@workspace/db";
+import { db, hasDatabase, lecturerJobsTable } from "@workspace/db";
 import {
   CreateLecturerJobResponse,
   GetLecturerJobResponse,
@@ -61,6 +61,18 @@ function mapJob(job: Awaited<ReturnType<typeof getJob>>) {
 }
 
 const router: IRouter = Router();
+
+router.use((_req, res, next) => {
+  if (!hasDatabase) {
+    res.status(503).json({
+      error:
+        "Lecturer job processing is unavailable because DATABASE_URL is not configured in Vercel.",
+    });
+    return;
+  }
+
+  next();
+});
 
 // POST /lecturer/jobs — upload file + create job
 router.post(
