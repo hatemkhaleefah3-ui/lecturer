@@ -1,0 +1,64 @@
+name: Apply PDF fallback fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-pdf-fallback-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch PDF parser
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('artifacts/api-server/src/lib/lecturer/parser.ts')
+          text = path.read_text()
+          text = text.replace(
+              'model: "gemini-2.5-flash",',
+              'model: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",',
+              1,
+          )
+          old = '''async function parsePdf(filePath: string): Promise<ExtractionResult> {
+  const pdfParse = (await import("pdf-parse")).default;
+  const buffer = await fs.readFile(filePath);
+  const data = await pdfParse(buffer);
+  let textBlocks = normalizeBlocks(String(data.text ?? "")).map((text, index) => ({ index, text }));
+  if (textBlocks.length === 0) textBlocks = await extractScannedPdfText(buffer);
+  const images = await extractPdfImages(buffer, textBlocks);
+  return { textBlocks, images };
+}'''
+          new = '''async function parsePdf(filePath: string): Promise<ExtractionResult> {
+  const pdfParse = (await import("pdf-parse")).default;
+  const buffer = await fs.readFile(filePath);
+  let textBlocks: TextBlock[] = [];
+  try {
+    const data = await pdfParse(buffer);
+    textBlocks = normalizeBlocks(String(data.text ?? "")).map((text, index) => ({ index, text }));
+  } catch (error) {
+    console.warn("pdf-parse failed; using Gemini PDF vision fallback", error);
+  }
+  if (textBlocks.length === 0) textBlocks = await extractScannedPdfText(buffer);
+  if (textBlocks.length === 0) throw new Error("No text could be extracted from this PDF.");
+  const images = await extractPdfImages(buffer, textBlocks);
+  return { textBlocks, images };
+}'''
+          if old not in text:
+              raise SystemExit('Expected parsePdf block not found')
+          path.write_text(text.replace(old, new))
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add artifacts/api-server/src/lib/lecturer/parser.ts
+          git commit -m "fix: fall back to Gemini when PDF parsing fails"
+          git push origin main
