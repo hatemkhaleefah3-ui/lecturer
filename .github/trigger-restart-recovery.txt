@@ -1,1 +1,1 @@
-Verification trigger for the Node-safe PDF.js loading change.
+Verification trigger for Node-safe PDF.js loading and restart recovery.
