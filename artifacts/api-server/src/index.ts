@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { pool } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -15,11 +16,45 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
+async function ensureDatabaseSchema(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lecturer_jobs (
+      id text PRIMARY KEY,
+      status text NOT NULL DEFAULT 'pending',
+      progress_step text,
+      progress_pct integer,
+      input_filename text NOT NULL,
+      input_mimetype text,
+      extracted_text_count integer,
+      extracted_image_count integer,
+      slide_count integer,
+      slides_json jsonb,
+      integrity_json jsonb,
+      pptx_path text,
+      error text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+async function start(): Promise<void> {
+  try {
+    await ensureDatabaseSchema();
+    logger.info("Database schema is ready");
+  } catch (err) {
+    logger.error({ err }, "Failed to initialize database schema");
     process.exit(1);
   }
 
-  logger.info({ port }, "Server listening");
-});
+  app.listen(port, (err) => {
+    if (err) {
+      logger.error({ err }, "Error listening on port");
+      process.exit(1);
+    }
+
+    logger.info({ port }, "Server listening");
+  });
+}
+
+void start();
