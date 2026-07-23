@@ -1,73 +1,125 @@
-import app from "./app";
-import { logger } from "./lib/logger";
-import { hasDatabase, pool } from "@workspace/db";
+import express, { type RequestHandler } from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-async function ensureDatabaseSchema(): Promise<void> {
-  if (!hasDatabase) {
-    logger.warn(
-      "DATABASE_URL is not configured; health checks and the web interface remain available, but lecturer jobs are disabled",
-    );
+const app = express();
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const frontendDir = path.resolve(currentDir, "../public");
+const frontendIndex = path.join(frontendDir, "index.html");
+
+const requestLogger = {
+  info: (...args: unknown[]) => console.info(...args),
+  warn: (...args: unknown[]) => console.warn(...args),
+  error: (...args: unknown[]) => console.error(...args),
+  debug: (...args: unknown[]) => console.debug(...args),
+  child: () => requestLogger,
+};
+
+app.use((req, _res, next) => {
+  (req as typeof req & { log: typeof requestLogger }).log = requestLogger;
+  next();
+});
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.get("/api/healthz", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+let databaseReady: Promise<void> | undefined;
+let lecturerRouter: Promise<RequestHandler> | undefined;
+
+function ensureDatabase(): Promise<void> {
+  databaseReady ??= import("@workspace/db").then(async ({ pool }) => {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lecturer_jobs (
+        id text PRIMARY KEY,
+        status text NOT NULL DEFAULT 'pending',
+        progress_step text,
+        progress_pct integer,
+        input_filename text NOT NULL,
+        input_mimetype text,
+        extracted_text_count integer,
+        extracted_image_count integer,
+        slide_count integer,
+        slides_json jsonb,
+        integrity_json jsonb,
+        pptx_path text,
+        error text,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+  });
+
+  return databaseReady;
+}
+
+function getLecturerRouter(): Promise<RequestHandler> {
+  lecturerRouter ??= import("./routes/lecturer/index.js").then(
+    ({ default: router }) => router as unknown as RequestHandler,
+  );
+  return lecturerRouter;
+}
+
+app.use("/api", async (req, res, next) => {
+  if (!req.path.startsWith("/lecturer")) {
+    next();
     return;
   }
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS lecturer_jobs (
-      id text PRIMARY KEY,
-      status text NOT NULL DEFAULT 'pending',
-      progress_step text,
-      progress_pct integer,
-      input_filename text NOT NULL,
-      input_mimetype text,
-      extracted_text_count integer,
-      extracted_image_count integer,
-      slide_count integer,
-      slides_json jsonb,
-      integrity_json jsonb,
-      pptx_path text,
-      error text,
-      created_at timestamp NOT NULL DEFAULT now(),
-      updated_at timestamp NOT NULL DEFAULT now()
-    )
-  `);
-
-  // Processing currently runs inside this web process. If the process restarts,
-  // those in-memory tasks cannot resume. Mark their database rows as failed
-  // instead of leaving the UI permanently stuck at the last percentage.
-  const orphaned = await pool.query(`
-    UPDATE lecturer_jobs
-    SET
-      status = 'failed',
-      progress_step = NULL,
-      error = 'Processing was interrupted because the server restarted. Please upload the document again.',
-      updated_at = now()
-    WHERE status IN ('pending', 'extracting', 'analyzing', 'generating')
-    RETURNING id
-  `);
-
-  if (orphaned.rowCount) {
-    logger.warn(
-      { orphanedJobs: orphaned.rowCount },
-      "Marked interrupted lecturer jobs as failed",
-    );
+  if (!process.env.DATABASE_URL) {
+    res.status(503).json({
+      error:
+        "Lecturer job processing is unavailable because DATABASE_URL is not configured in Vercel.",
+    });
+    return;
   }
-}
 
-async function initializeDatabase(): Promise<void> {
   try {
-    await ensureDatabaseSchema();
-    if (hasDatabase) logger.info("Database schema is ready");
-  } catch (err) {
-    logger.error(
-      { err },
-      "Database initialization failed; continuing with database-backed routes unavailable",
-    );
+    await ensureDatabase();
+    const router = await getLecturerRouter();
+    router(req, res, next);
+  } catch (error) {
+    console.error("Failed to initialize Lecturer API", error);
+    res.status(500).json({ error: "Failed to initialize Lecturer API" });
   }
-}
+});
 
-void initializeDatabase();
+app.use(express.static(frontendDir));
+app.use((req, res, next) => {
+  if (
+    req.method === "GET" &&
+    !req.path.startsWith("/api") &&
+    req.accepts("html")
+  ) {
+    res.sendFile(frontendIndex, (error) => {
+      if (error) next(error);
+    });
+    return;
+  }
 
-// Vercel invokes the exported Express handler directly. Traditional hosts and
-// local development still use the HTTP listener through the package start script.
+  next();
+});
+
+app.use((_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
+app.use(
+  (
+    error: unknown,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    console.error("Unhandled request error", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
 if (!process.env.VERCEL) {
   const rawPort = process.env.PORT ?? "3000";
   const port = Number(rawPort);
@@ -76,13 +128,8 @@ if (!process.env.VERCEL) {
     throw new Error(`Invalid PORT value: "${rawPort}"`);
   }
 
-  app.listen(port, (err) => {
-    if (err) {
-      logger.error({ err }, "Error listening on port");
-      process.exit(1);
-    }
-
-    logger.info({ port }, "Server listening");
+  app.listen(port, () => {
+    console.info(`Lecturer server listening on port ${port}`);
   });
 }
 
