@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Lecturer"
+version = "1.0.0"
+id = "artifacts/lecturer-app"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24928
+
+[services.development]
+run = "pnpm --filter @workspace/lecturer-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/lecturer-app", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/lecturer-app/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24928"
+BASE_PATH = "/"

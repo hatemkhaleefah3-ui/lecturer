@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: lecturer
+    description: Lecturer slide generation operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,120 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /lecturer/jobs:
+    post:
+      operationId: createLecturerJob
+      tags: [lecturer]
+      summary: Upload a lecture file and start processing
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/LecturerUploadInput"
+      responses:
+        "201":
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LecturerJob"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /lecturer/jobs/{jobId}:
+    get:
+      operationId: getLecturerJob
+      tags: [lecturer]
+      summary: Get job status and progress
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LecturerJob"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /lecturer/jobs/{jobId}/slides:
+    get:
+      operationId: getLecturerSlides
+      tags: [lecturer]
+      summary: Get structured slide JSON and integrity report for a completed job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Slides and integrity report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlidesResult"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job not yet complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /lecturer/jobs/{jobId}/download:
+    get:
+      operationId: downloadLecturerPptx
+      tags: [lecturer]
+      summary: Download the generated .pptx file
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PPTX binary
+          content:
+            application/vnd.openxmlformats-officedocument.presentationml.presentation:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job not yet complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +150,191 @@ components:
       required:
         - status
 
+    LecturerUploadInput:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+      required:
+        - file
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    LecturerJob:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, extracting, analyzing, generating, completed, failed]
+        progressStep:
+          type: string
+          nullable: true
+        progressPct:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        inputFilename:
+          type: string
+        extractedTextCount:
+          type: integer
+          nullable: true
+        extractedImageCount:
+          type: integer
+          nullable: true
+        slideCount:
+          type: integer
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - status
+        - inputFilename
+        - createdAt
+        - updatedAt
+
+    SlideImage:
+      type: object
+      properties:
+        originalIndex:
+          type: integer
+        dataBase64:
+          type: string
+          nullable: true
+        mimeType:
+          type: string
+          nullable: true
+        altText:
+          type: string
+          nullable: true
+      required:
+        - originalIndex
+
+    SlideData:
+      type: object
+      properties:
+        index:
+          type: integer
+        type:
+          type: string
+          enum:
+            - title
+            - section_header
+            - content
+            - data_table
+            - chart
+            - comparison
+            - callout
+        title:
+          type: string
+          nullable: true
+        subtitle:
+          type: string
+          nullable: true
+        body:
+          type: string
+          nullable: true
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlideImage"
+        tableHeaders:
+          type: array
+          nullable: true
+          items:
+            type: string
+        tableRows:
+          type: array
+          nullable: true
+          items:
+            type: array
+            items:
+              type: string
+        chartType:
+          type: string
+          nullable: true
+          enum: [bar, line, pie, null]
+        chartData:
+          type: object
+          nullable: true
+          additionalProperties: true
+        leftColumn:
+          type: string
+          nullable: true
+        rightColumn:
+          type: string
+          nullable: true
+        calloutIcon:
+          type: string
+          nullable: true
+        calloutStyle:
+          type: string
+          nullable: true
+          enum: [definition, warning, takeaway, null]
+        textBlockIndices:
+          type: array
+          items:
+            type: integer
+      required:
+        - index
+        - type
+
+    IntegrityReport:
+      type: object
+      properties:
+        textBlocksExtracted:
+          type: integer
+        textBlocksPlaced:
+          type: integer
+        imagesExtracted:
+          type: integer
+        imagesPlaced:
+          type: integer
+        unplacedTextIndices:
+          type: array
+          items:
+            type: integer
+        unplacedImageIndices:
+          type: array
+          items:
+            type: integer
+        allPlaced:
+          type: boolean
+      required:
+        - textBlocksExtracted
+        - textBlocksPlaced
+        - imagesExtracted
+        - imagesPlaced
+        - unplacedTextIndices
+        - unplacedImageIndices
+        - allPlaced
+
+    SlidesResult:
+      type: object
+      properties:
+        slides:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlideData"
+        integrity:
+          $ref: "#/components/schemas/IntegrityReport"
+      required:
+        - slides
+        - integrity
